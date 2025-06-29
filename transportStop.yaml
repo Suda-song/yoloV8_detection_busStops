@@ -1,0 +1,13 @@
+train: F:\training\公交\transport_stop.v3i.yolov8\train\images
+val: F:\training\公交\transport_stop.v3i.yolov8\valid\images
+test: F:\training\公交\transport_stop.v3i.yolov8\test\images
+
+nc: 1
+names: ['transport_stop']
+
+roboflow:
+  workspace: yolo-sgdcx
+  project: transport_stop
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/yolo-sgdcx/transport_stop/dataset/3
