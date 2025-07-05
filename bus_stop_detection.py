@@ -65,8 +65,8 @@ class BusStopDetector:
             'image_size': [width, height],
             'detections': detections,
             'detection_count': len(detections),
-            'output_image_path': output_path,  # 添加输出图片路径
-            'annotated_image': annotated_image  # 添加带标注的图片
+            'output_image_path': output_path,
+            'annotated_image': annotated_image
         }
     
     def detect_single_image(self, image, conf_threshold):
@@ -210,318 +210,325 @@ class BusStopDetector:
         
         return intersection / union if union > 0 else 0.0
     
-    def detect_folder_batch(self, input_folder, output_folder, conf_threshold=0.5, 
-                           enable_sliding_window=False):
+    def convert_to_yolo_format(self, bbox, image_width, image_height):
         """
-        批量检测文件夹中的图片，按检测结果分类保存
+        将边界框坐标转换为YOLO格式
         Args:
-            input_folder: 输入图片文件夹路径
-            output_folder: 输出结果文件夹路径
+            bbox: [x1, y1, x2, y2] 格式的边界框
+            image_width: 图片宽度
+            image_height: 图片高度
+        Returns:
+            [x_center, y_center, width, height] 格式的YOLO坐标
+        """
+        x1, y1, x2, y2 = bbox
+        
+        # 计算中心点和宽高
+        x_center = (x1 + x2) / 2.0
+        y_center = (y1 + y2) / 2.0
+        width = x2 - x1
+        height = y2 - y1
+        
+        # 归一化到0-1范围
+        x_center /= image_width
+        y_center /= image_height
+        width /= image_width
+        height /= image_height
+        
+        return [x_center, y_center, width, height]
+    
+    def detect_folder_batch(self, input_folder, output_folder, conf_threshold=0.5, 
+                           enable_sliding_window=False, generate_yolo_data=True):
+        """
+        批量检测文件夹中的图片
+        Args:
+            input_folder: 输入文件夹路径
+            output_folder: 输出文件夹路径
             conf_threshold: 置信度阈值
-            enable_sliding_window: 是否启用滑动窗口检测
+            enable_sliding_window: 是否启用滑动窗口
+            generate_yolo_data: 是否生成YOLO格式训练数据
         """
         # 支持的图片格式
         image_extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif']
         
-        # 创建输出文件夹结构
-        self.create_output_folders(output_folder)
-        
-        # 获取文件夹中的所有图片
+        # 获取所有图片文件
         image_files = []
         for file in os.listdir(input_folder):
             if any(file.lower().endswith(ext) for ext in image_extensions):
                 image_files.append(os.path.join(input_folder, file))
         
+        print(f"找到 {len(image_files)} 张图片")
+        
         if not image_files:
-            print(f"在文件夹 {input_folder} 中未找到图片文件")
+            print("未找到图片文件")
             return
         
-        print(f"找到 {len(image_files)} 张图片，开始检测...")
+        # 创建输出文件夹结构
+        self.create_output_folders(output_folder, generate_yolo_data)
         
-        # 存储所有检测结果
+        # 批量检测
         all_results = []
-        detected_images = []  # 检测到公交站的图片
-        not_detected_images = []  # 未检测到公交站的图片
-        total_detections = 0
+        detected_images = []
+        not_detected_images = []
         
-        # 逐张图片检测
-        for i, image_path in enumerate(image_files, 1):
-            print(f"\n正在处理第 {i}/{len(image_files)} 张图片: {os.path.basename(image_path)}")
+        for i, image_path in enumerate(image_files):
+            print(f"\n处理第 {i+1}/{len(image_files)} 张图片: {os.path.basename(image_path)}")
             
-            # 检测当前图片，指定输出目录为带标注图片文件夹
-            annotated_images_folder = os.path.join(output_folder, "annotated_images")
+            # 检测图片
             result = self.detect_image(
-                image_path, conf_threshold, annotated_images_folder, enable_sliding_window
+                image_path, 
+                conf_threshold=conf_threshold,
+                output_dir=os.path.join(output_folder, 'annotated_images'),
+                enable_sliding_window=enable_sliding_window
             )
             
             if result:
                 all_results.append(result)
-                total_detections += result['detection_count']
                 
-                # 输出当前图片的检测结果
-                if result['detections']:
-                    print(f"  ✓ 检测到 {len(result['detections'])} 个公交站")
-                    for j, det in enumerate(result['detections'], 1):
-                        print(f"    公交站 {j}: 置信度 {det['confidence']:.2f}")
-                    
-                    # 添加到检测到的图片列表
-                    detected_images.append({
-                        'filename': os.path.basename(image_path),
-                        'full_path': image_path,
-                        'detection_count': result['detection_count'],
-                        'max_confidence': max([det['confidence'] for det in result['detections']])
-                    })
+                # 分类图片
+                if result['detection_count'] > 0:
+                    detected_images.append(result)
+                    print(f"检测到 {result['detection_count']} 个公交站")
                 else:
-                    print(f"  ✗ 未检测到公交站")
-                    # 添加到未检测到的图片列表
-                    not_detected_images.append({
-                        'filename': os.path.basename(image_path),
-                        'full_path': image_path
-                    })
+                    not_detected_images.append(result)
+                    print("未检测到公交站")
                 
-                # 立即保存当前结果到JSON文件
+                # 保存单张图片结果
                 self.save_single_result(result, output_folder, i)
-                
-                print(f"  ✓ 第 {i} 张图片检测完成并保存")
-            else:
-                print(f"  ✗ 第 {i} 张图片处理失败")
+        
+        # 生成YOLO格式训练数据
+        if generate_yolo_data:
+            self.generate_yolo_training_data(all_results, output_folder)
         
         # 分类保存图片
         self.classify_and_save_images(all_results, output_folder)
         
         # 生成CSV文件
-        self.generate_csv_files(image_files, detected_images, not_detected_images, output_folder)
+        self.generate_csv_files(all_results, detected_images, not_detected_images, output_folder)
         
-        # 保存总体结果
+        # 保存汇总结果
         self.save_summary_results(all_results, output_folder)
         
         print(f"\n=== 检测完成 ===")
-        print(f"总图片数: {len(image_files)}")
-        print(f"成功处理: {len(all_results)}")
+        print(f"总图片数: {len(all_results)}")
         print(f"检测到公交站的图片: {len(detected_images)}")
         print(f"未检测到公交站的图片: {len(not_detected_images)}")
-        print(f"总检测数: {total_detections}")
-        
-        # 显示置信度统计
-        all_confidences = []
-        for result in all_results:
-            for det in result['detections']:
-                all_confidences.append(det['confidence'])
-        
-        if all_confidences:
-            print(f"平均置信度: {sum(all_confidences)/len(all_confidences):.3f}")
-            print(f"最高置信度: {max(all_confidences):.3f}")
-            print(f"最低置信度: {min(all_confidences):.3f}")
+        print(f"结果保存在: {output_folder}")
     
-    def create_output_folders(self, output_folder):
+    def create_output_folders(self, output_folder, generate_yolo_data=True):
         """创建输出文件夹结构"""
-        # 主输出文件夹
-        os.makedirs(output_folder, exist_ok=True)
+        folders = [
+            'detected_images',      # 检测到公交站的图片
+            'not_detected_images',  # 未检测到公交站的图片
+            'annotated_images',     # 带标注的图片
+            'json_results',         # JSON结果文件
+            'csv_files',           # CSV文件
+        ]
         
-        # 带标注的图片文件夹
-        annotated_folder = os.path.join(output_folder, "annotated_images")
+        if generate_yolo_data:
+            folders.extend([
+                'yolo_dataset',     # YOLO格式数据集
+                'yolo_dataset/images',  # YOLO图片
+                'yolo_dataset/labels',  # YOLO标签
+            ])
         
-        # 分类文件夹
-        detected_folder = os.path.join(output_folder, "detected_images")
-        not_detected_folder = os.path.join(output_folder, "not_detected_images")
+        for folder in folders:
+            os.makedirs(os.path.join(output_folder, folder), exist_ok=True)
+    
+    def generate_yolo_training_data(self, all_results, output_folder):
+        """生成YOLO格式的训练数据"""
+        yolo_images_dir = os.path.join(output_folder, 'yolo_dataset', 'images')
+        yolo_labels_dir = os.path.join(output_folder, 'yolo_dataset', 'labels')
         
-        os.makedirs(annotated_folder, exist_ok=True)
-        os.makedirs(detected_folder, exist_ok=True)
-        os.makedirs(not_detected_folder, exist_ok=True)
+        print("\n生成YOLO格式训练数据...")
         
-        print(f"输出文件夹结构已创建:")
-        print(f"  - 主文件夹: {output_folder}")
-        print(f"  - 带标注图片: {annotated_folder}")
-        print(f"  - 检测到公交站: {detected_folder}")
-        print(f"  - 未检测到公交站: {not_detected_folder}")
+        for i, result in enumerate(all_results):
+            image_path = result['image_path']
+            image_name = os.path.splitext(os.path.basename(image_path))[0]
+            
+            # 复制图片到YOLO数据集
+            yolo_image_path = os.path.join(yolo_images_dir, f"{image_name}.jpg")
+            shutil.copy2(image_path, yolo_image_path)
+            
+            # 生成标签文件
+            label_path = os.path.join(yolo_labels_dir, f"{image_name}.txt")
+            
+            with open(label_path, 'w') as f:
+                for detection in result['detections']:
+                    # 转换为YOLO格式 (class_id x_center y_center width height)
+                    bbox = detection['bbox']
+                    yolo_bbox = self.convert_to_yolo_format(
+                        bbox, result['image_size'][0], result['image_size'][1]
+                    )
+                    
+                    # 公交站类别ID为0
+                    line = f"0 {' '.join([str(x) for x in yolo_bbox])}\n"
+                    f.write(line)
+        
+        # 生成YOLO配置文件
+        self.generate_yolo_config(output_folder, len(all_results))
+        
+        print(f"YOLO数据集已生成: {yolo_images_dir}")
+    
+    def generate_yolo_config(self, output_folder, data_count):
+        """生成YOLO配置文件"""
+        config_content = f"""# YOLO数据集配置文件
+# 数据集路径
+path: {output_folder}/yolo_dataset
+train: images
+val: images
+
+# 类别信息
+nc: 1  # 类别数量
+names: ['bus_stop']  # 类别名称
+
+# 数据集统计
+total_images: {data_count}
+"""
+        
+        config_path = os.path.join(output_folder, 'yolo_dataset', 'dataset.yaml')
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.write(config_content)
+        
+        print(f"YOLO配置文件已生成: {config_path}")
     
     def classify_and_save_images(self, all_results, output_folder):
         """分类保存图片"""
-        detected_folder = os.path.join(output_folder, "detected_images")
-        not_detected_folder = os.path.join(output_folder, "not_detected_images")
-        
-        print(f"\n开始分类保存图片...")
+        detected_dir = os.path.join(output_folder, 'detected_images')
+        not_detected_dir = os.path.join(output_folder, 'not_detected_images')
         
         for result in all_results:
             image_path = result['image_path']
-            filename = os.path.basename(image_path)
+            image_name = os.path.basename(image_path)
             
-            # 使用已经生成的带标注图片
-            annotated_image = result.get('annotated_image')
-            if annotated_image is None:
-                # 如果没有，重新读取原图并生成
-                image = cv2.imread(image_path)
-                if image is None:
-                    continue
-                annotated_image = self.draw_results(image, result['detections'])
-            
-            # 根据检测结果分类保存
             if result['detection_count'] > 0:
-                # 检测到公交站，保存到detected_images文件夹
-                output_path = os.path.join(detected_folder, f"detected_{filename}")
-                cv2.imwrite(output_path, annotated_image)
-                print(f"  ✓ 保存到检测到公交站文件夹: {filename}")
+                # 检测到公交站的图片
+                dest_path = os.path.join(detected_dir, image_name)
             else:
-                # 未检测到公交站，保存到not_detected_images文件夹
-                output_path = os.path.join(not_detected_folder, f"detected_{filename}")
-                cv2.imwrite(output_path, annotated_image)
-                print(f"  ✓ 保存到未检测到公交站文件夹: {filename}")
-        
-        print(f"分类保存完成!")
-        print(f"  - 检测到公交站文件夹: {len([r for r in all_results if r['detection_count'] > 0])} 张图片")
-        print(f"  - 未检测到公交站文件夹: {len([r for r in all_results if r['detection_count'] == 0])} 张图片")
+                # 未检测到公交站的图片
+                dest_path = os.path.join(not_detected_dir, image_name)
+            
+            shutil.copy2(image_path, dest_path)
     
     def generate_csv_files(self, all_images, detected_images, not_detected_images, output_folder):
         """生成CSV文件"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_dir = os.path.join(output_folder, 'csv_files')
         
-        # 1. 全部检测的照片文件名
-        all_images_csv = os.path.join(output_folder, f"all_images_{timestamp}.csv")
+        # 1. 全部检测的图片文件名
+        all_images_csv = os.path.join(csv_dir, 'all_images.csv')
         with open(all_images_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['序号', '文件名', '完整路径'])
-            for i, image_path in enumerate(all_images, 1):
-                writer.writerow([i, os.path.basename(image_path), image_path])
-        
-        # 2. 检测到公交站的照片文件名
-        detected_csv = os.path.join(output_folder, f"detected_images_{timestamp}.csv")
-        with open(detected_csv, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['序号', '文件名', '完整路径', '检测数量', '最高置信度'])
-            for i, img_info in enumerate(detected_images, 1):
+            writer.writerow(['文件名', '图片路径', '检测数量', '图片尺寸'])
+            for result in all_images:
                 writer.writerow([
-                    i, 
-                    img_info['filename'], 
-                    img_info['full_path'],
-                    img_info['detection_count'],
-                    f"{img_info['max_confidence']:.3f}"
+                    os.path.basename(result['image_path']),
+                    result['image_path'],
+                    result['detection_count'],
+                    f"{result['image_size'][0]}x{result['image_size'][1]}"
                 ])
         
-        # 3. 没有检测到公交站的文件名
-        not_detected_csv = os.path.join(output_folder, f"not_detected_images_{timestamp}.csv")
+        # 2. 检测到公交站的图片文件名
+        detected_csv = os.path.join(csv_dir, 'detected_images.csv')
+        with open(detected_csv, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['文件名', '图片路径', '检测数量', '置信度'])
+            for result in detected_images:
+                confidences = [d['confidence'] for d in result['detections']]
+                writer.writerow([
+                    os.path.basename(result['image_path']),
+                    result['image_path'],
+                    result['detection_count'],
+                    ', '.join([f"{c:.3f}" for c in confidences])
+                ])
+        
+        # 3. 未检测到公交站的图片文件名
+        not_detected_csv = os.path.join(csv_dir, 'not_detected_images.csv')
         with open(not_detected_csv, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['序号', '文件名', '完整路径'])
-            for i, img_info in enumerate(not_detected_images, 1):
-                writer.writerow([i, img_info['filename'], img_info['full_path']])
+            writer.writerow(['文件名', '图片路径'])
+            for result in not_detected_images:
+                writer.writerow([
+                    os.path.basename(result['image_path']),
+                    result['image_path']
+                ])
         
-        print(f"\nCSV文件已生成:")
-        print(f"  - 全部图片: {os.path.basename(all_images_csv)}")
-        print(f"  - 检测到公交站: {os.path.basename(detected_csv)}")
-        print(f"  - 未检测到公交站: {os.path.basename(not_detected_csv)}")
+        print(f"CSV文件已生成: {csv_dir}")
     
     def save_single_result(self, result, output_folder, image_index):
-        """
-        保存单张图片的检测结果
-        Args:
-            result: 检测结果
-            output_folder: 输出文件夹
-            image_index: 图片索引
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"result_{image_index:03d}_{os.path.basename(result['image_path']).split('.')[0]}_{timestamp}.json"
-        filepath = os.path.join(output_folder, filename)
+        """保存单张图片的检测结果"""
+        json_dir = os.path.join(output_folder, 'json_results')
+        image_name = os.path.splitext(os.path.basename(result['image_path']))[0]
         
-        save_data = {
-            'timestamp': datetime.now().isoformat(),
-            'image_index': image_index,
-            'image_path': result['image_path'],
-            'image_size': result['image_size'],
-            'detection_count': result['detection_count'],
-            'detections': result['detections'],
-            'output_image_path': result.get('output_image_path', '')  # 添加输出图片路径
-        }
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(save_data, f, ensure_ascii=False, indent=2)
-        
-        print(f"    结果已保存: {filename}")
+        # 保存JSON结果
+        json_path = os.path.join(json_dir, f"{image_name}_result.json")
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
     
     def save_summary_results(self, all_results, output_folder):
-        """
-        保存总体检测结果
-        Args:
-            all_results: 所有检测结果
-            output_folder: 输出文件夹
-        """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        summary_file = os.path.join(output_folder, f"summary_results_{timestamp}.json")
-        
-        # 计算统计信息
-        total_images = len(all_results)
-        total_detections = sum(r['detection_count'] for r in all_results)
-        images_with_detections = len([r for r in all_results if r['detection_count'] > 0])
-        
-        all_confidences = []
-        for result in all_results:
-            for det in result['detections']:
-                all_confidences.append(det['confidence'])
-        
-        summary_data = {
-            'timestamp': datetime.now().isoformat(),
-            'summary': {
-                'total_images': total_images,
-                'total_detections': total_detections,
-                'images_with_detections': images_with_detections,
-                'images_without_detections': total_images - images_with_detections,
-                'detection_rate': images_with_detections / total_images if total_images > 0 else 0,
-                'average_confidence': sum(all_confidences)/len(all_confidences) if all_confidences else 0,
-                'max_confidence': max(all_confidences) if all_confidences else 0,
-                'min_confidence': min(all_confidences) if all_confidences else 0
-            },
-            'all_results': all_results
+        """保存汇总结果"""
+        summary = {
+            'total_images': len(all_results),
+            'detected_images': len([r for r in all_results if r['detection_count'] > 0]),
+            'not_detected_images': len([r for r in all_results if r['detection_count'] == 0]),
+            'total_detections': sum(r['detection_count'] for r in all_results),
+            'average_confidence': np.mean([
+                np.mean([d['confidence'] for d in r['detections']]) 
+                for r in all_results if r['detections']
+            ]) if any(r['detections'] for r in all_results) else 0,
+            'detection_time': datetime.now().isoformat(),
+            'results': all_results
         }
         
-        with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump(summary_data, f, ensure_ascii=False, indent=2)
+        summary_path = os.path.join(output_folder, 'detection_summary.json')
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2)
         
-        print(f"\n总体结果已保存到: {summary_file}")
+        print(f"汇总结果已保存: {summary_path}")
     
     def draw_results(self, image, detections):
         """在图片上绘制检测结果"""
-        result_image = image.copy()
+        annotated_image = image.copy()
         
         for detection in detections:
-            x1, y1, x2, y2 = detection['bbox']
+            bbox = detection['bbox']
             confidence = detection['confidence']
             
-            # 绘制边界框（绿色）
-            cv2.rectangle(result_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # 绘制边界框
+            cv2.rectangle(annotated_image, 
+                         (bbox[0], bbox[1]), (bbox[2], bbox[3]), 
+                         (0, 255, 0), 2)
             
             # 绘制标签
-            label = f"Bus Stop: {confidence:.2f}"
-            cv2.putText(result_image, label, (x1, y1-10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            label = f"Bus Stop: {confidence:.3f}"
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)[0]
+            
+            # 绘制标签背景
+            cv2.rectangle(annotated_image, 
+                         (bbox[0], bbox[1] - label_size[1] - 10),
+                         (bbox[0] + label_size[0], bbox[1]), 
+                         (0, 255, 0), -1)
+            
+            # 绘制标签文字
+            cv2.putText(annotated_image, label, 
+                       (bbox[0], bbox[1] - 5), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
         
-        return result_image
+        return annotated_image
 
 def main():
-    """主函数"""
-    # 设置输入和输出文件夹路径
+    # 输入和输出路径
     input_folder = r"F:\training\pre"
     output_folder = r"F:\training\pre_result"
-    
-    # 检查输入文件夹是否存在
-    if not os.path.exists(input_folder):
-        print(f"输入文件夹不存在: {input_folder}")
-        return
-    
-    if not os.path.isdir(input_folder):
-        print(f"输入路径不是文件夹: {input_folder}")
-        return
-    
-    print(f"输入文件夹: {input_folder}")
-    print(f"输出文件夹: {output_folder}")
     
     # 创建检测器
     detector = BusStopDetector()
     
-    # 开始批量检测（启用滑动窗口检测以处理大图片）
+    # 批量检测
     detector.detect_folder_batch(
-        input_folder, 
-        output_folder, 
+        input_folder=input_folder,
+        output_folder=output_folder,
         conf_threshold=0.5,
-        enable_sliding_window=True  # 启用滑动窗口检测
+        enable_sliding_window=True,
+        generate_yolo_data=True
     )
 
 if __name__ == "__main__":
