@@ -50,8 +50,8 @@ class BusStopDetector:
         # 在图片上绘制检测结果并保存
         annotated_image = self.draw_results(image, detections)
         
+        # 确保输出目录存在
         if output_dir:
-            # 确保输出目录存在
             os.makedirs(output_dir, exist_ok=True)
             output_path = os.path.join(output_dir, f"detected_{os.path.basename(image_path)}")
         else:
@@ -64,7 +64,9 @@ class BusStopDetector:
             'image_path': image_path,
             'image_size': [width, height],
             'detections': detections,
-            'detection_count': len(detections)
+            'detection_count': len(detections),
+            'output_image_path': output_path,  # 添加输出图片路径
+            'annotated_image': annotated_image  # 添加带标注的图片
         }
     
     def detect_single_image(self, image, conf_threshold):
@@ -246,9 +248,10 @@ class BusStopDetector:
         for i, image_path in enumerate(image_files, 1):
             print(f"\n正在处理第 {i}/{len(image_files)} 张图片: {os.path.basename(image_path)}")
             
-            # 检测当前图片
+            # 检测当前图片，指定输出目录为带标注图片文件夹
+            annotated_images_folder = os.path.join(output_folder, "annotated_images")
             result = self.detect_image(
-                image_path, conf_threshold, None, enable_sliding_window
+                image_path, conf_threshold, annotated_images_folder, enable_sliding_window
             )
             
             if result:
@@ -315,15 +318,20 @@ class BusStopDetector:
         # 主输出文件夹
         os.makedirs(output_folder, exist_ok=True)
         
+        # 带标注的图片文件夹
+        annotated_folder = os.path.join(output_folder, "annotated_images")
+        
         # 分类文件夹
         detected_folder = os.path.join(output_folder, "detected_images")
         not_detected_folder = os.path.join(output_folder, "not_detected_images")
         
+        os.makedirs(annotated_folder, exist_ok=True)
         os.makedirs(detected_folder, exist_ok=True)
         os.makedirs(not_detected_folder, exist_ok=True)
         
         print(f"输出文件夹结构已创建:")
         print(f"  - 主文件夹: {output_folder}")
+        print(f"  - 带标注图片: {annotated_folder}")
         print(f"  - 检测到公交站: {detected_folder}")
         print(f"  - 未检测到公交站: {not_detected_folder}")
     
@@ -332,27 +340,36 @@ class BusStopDetector:
         detected_folder = os.path.join(output_folder, "detected_images")
         not_detected_folder = os.path.join(output_folder, "not_detected_images")
         
+        print(f"\n开始分类保存图片...")
+        
         for result in all_results:
             image_path = result['image_path']
             filename = os.path.basename(image_path)
             
-            # 读取原图
-            image = cv2.imread(image_path)
-            if image is None:
-                continue
-            
-            # 在图片上绘制检测结果
-            annotated_image = self.draw_results(image, result['detections'])
+            # 使用已经生成的带标注图片
+            annotated_image = result.get('annotated_image')
+            if annotated_image is None:
+                # 如果没有，重新读取原图并生成
+                image = cv2.imread(image_path)
+                if image is None:
+                    continue
+                annotated_image = self.draw_results(image, result['detections'])
             
             # 根据检测结果分类保存
             if result['detection_count'] > 0:
                 # 检测到公交站，保存到detected_images文件夹
                 output_path = os.path.join(detected_folder, f"detected_{filename}")
                 cv2.imwrite(output_path, annotated_image)
+                print(f"  ✓ 保存到检测到公交站文件夹: {filename}")
             else:
                 # 未检测到公交站，保存到not_detected_images文件夹
                 output_path = os.path.join(not_detected_folder, f"detected_{filename}")
                 cv2.imwrite(output_path, annotated_image)
+                print(f"  ✓ 保存到未检测到公交站文件夹: {filename}")
+        
+        print(f"分类保存完成!")
+        print(f"  - 检测到公交站文件夹: {len([r for r in all_results if r['detection_count'] > 0])} 张图片")
+        print(f"  - 未检测到公交站文件夹: {len([r for r in all_results if r['detection_count'] == 0])} 张图片")
     
     def generate_csv_files(self, all_images, detected_images, not_detected_images, output_folder):
         """生成CSV文件"""
@@ -411,7 +428,8 @@ class BusStopDetector:
             'image_path': result['image_path'],
             'image_size': result['image_size'],
             'detection_count': result['detection_count'],
-            'detections': result['detections']
+            'detections': result['detections'],
+            'output_image_path': result.get('output_image_path', '')  # 添加输出图片路径
         }
         
         with open(filepath, 'w', encoding='utf-8') as f:
