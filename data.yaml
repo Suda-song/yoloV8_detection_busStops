@@ -1,0 +1,12 @@
+path: C:\Project\ultralytics-8.2.103\dataset
+train: C:\Project\ultralytics-8.2.103\dataset/images/train
+val: C:\Project\ultralytics-8.2.103\dataset/images/val
+test: C:\Project\ultralytics-8.2.103\dataset/images/test
+nc: 6
+names:
+  0: 'DP'
+  1: 'CBFH'
+  2: 'ZY'
+  3: 'LG'
+  4: 'ZP'
+  5: 'FS'
